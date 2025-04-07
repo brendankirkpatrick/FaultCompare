@@ -36,7 +36,6 @@ update = { cmd = [
     "git",
     "submodule",
     "update",
-    "--init",
     "--recursive",
 ] }
-compare = { cmd = "./compare.sh", depends-on = "update" }
+compare = { cmd = "python src/compare.py" }
