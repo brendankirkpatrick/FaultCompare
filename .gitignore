@@ -2,6 +2,9 @@
 .pixi
 pixi.lock
 
+# Output directories
+out/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
