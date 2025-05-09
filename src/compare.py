@@ -4,8 +4,8 @@ from pathlib import Path
 
 # Add submodules to path for importing
 import sys, os
-sys.path.append(os.path.abspath(os.path.join('..', 'FaultArm')))
-sys.path.append(os.path.abspath(os.path.join('..', 'FaultFlipper/src')))
+sys.path.append(os.path.abspath(os.path.join('.', 'FaultArm')))
+sys.path.append(os.path.abspath(os.path.join('.', 'FaultFlipper/src')))
 
 # import packages from pip
 from utils import console
@@ -21,19 +21,21 @@ from cli import *
 
 
 def compare():
-    fr_asm_file = str("./guillermo_compiler_complex_insecure.s")
-# contains list of vulnerable instructions and their instruction number
+    #fr_asm_file = str("./guillermo_compiler_complex_insecure.s")
+    fr_asm_file = str("./password_check.s")
+
+    # contains list of vulnerable instructions and their instruction number
     arm_inst : list[int] = faultarm_parse(fr_asm_file)
 
-# FaultFlipper require the Binary file
+    # FaultFlipper require the Binary file
     ff_bin_file = Path("test_bin")
-    flip_inst = faultflipper_parse(ff_bin_file, 8)
+    flip_inst = faultflipper_parse(ff_bin_file, 1)
     for insn, line_num in flip_inst:
         print(f"{insn.mnemonic} {insn.op_str}\ton line {line_num}")
 
 
 def faultarm_parse(file: str) -> list[int]:
-# Parse data with Parser obj
+    # Parse data with Parser obj
     with console.status("Parsing file...", spinner="line"):
         try:
             parsed_data = Parser(file, console)
@@ -42,14 +44,14 @@ def faultarm_parse(file: str) -> list[int]:
             exit(1)
     console.log(f"Architecture Detected: [bright_yellow]{parsed_data.arch.name}[/bright_yellow]\n")
 
-# Analyze data with Analyzer to get vulnerability results
+    # Analyze data with Analyzer to get vulnerability results
     with console.status("Analyzing parsed data...", spinner="line"):
         analyzed_data = Analyzer(file, parsed_data, parsed_data.total_lines, "./out/", console)    
 
-# Get list of vulnerable instructions and their respective line numbers
+    # Get list of vulnerable instructions and their respective line numbers
     vuln_instructions = list()
 
-# Create quick function to insert all of the instructions into a flat list
+    # Create quick function to insert all of the instructions into a flat list
     def instr_app(vul_instr_list):
         for instr_block in vul_instr_list:
             for instr in instr_block:
@@ -60,24 +62,19 @@ def faultarm_parse(file: str) -> list[int]:
     instr_app(analyzed_data.branchV2_detector.vulnerable_instructions)
     instr_app(analyzed_data.bypass_detector.vulnerable_set)
 
-# create a list that stores the instruction number (relative to the first instruction)
-    rel_num = list()
-    for line_num, instr in enumerate(parsed_data.program):
-        for vuln in vuln_instructions:
-            if instr.line_number == vuln.line_number:
-# must check for instruction and ./@ chars since FaultFlipper disasm doesnt have those
-                if type(vuln) == Instruction:
-                    if '.' not in vuln.name and '@' not in vuln.name:
-                        rel_num.append(line_num)
-    
+    vuln_lines = [vuln.line_number for vuln in vuln_instructions]
+
+    rel_num = []
+    instruction_count = 0
+    for instr in parsed_data.program:
+        if type(instr) == Instruction and '.' not in instr.name and '@' not in instr.name:
+            instruction_count += 1
+            if instr.line_number in vuln_lines:
+                rel_num.append(instruction_count)
+
     return rel_num
 
 def extract_bit_exp(result):
-    other_returncodes = [
-        ("critical_code_ran", 0),
-        ("critical_code_did_not_run", 97),
-        ("failed_to_run", -900),
-    ]
     for (
         out_file,
         returncode,
@@ -88,14 +85,14 @@ def extract_bit_exp(result):
         stderr,
         i,
     ) in result:
-        if stdout.contains(common.expected_stdout) and returncode == common.expected_returncode:
+        if common.expected_stdout in stdout or common.expected_returncode == returncode:
             return True
     return False
 
 
 def faultflipper_parse(binary_path: Path, num_cpus: int) -> pd.DataFrame:
     output_path = Path("out")
-    common = CommandParameters(binary_path, output_path, "5", "Access denied.", 0)
+    common = CommandParameters(binary_path, output_path, "wrong\n", "Access denied.", 0, timeout=0.5)
     common.out_dir.mkdir(exist_ok=True)
 
     binary = lief.parse(common.program_file)
@@ -126,6 +123,7 @@ def faultflipper_parse(binary_path: Path, num_cpus: int) -> pd.DataFrame:
             instn_count = args[-1] if args else None
             return (func(*args[:-1], **kwargs), instn, instn_count)
         return wrapper
+
     # creates wrapper function to pass to future
     para_bit_args = exp_wrapper(bit_para_run_helper)
 
@@ -147,10 +145,10 @@ def faultflipper_parse(binary_path: Path, num_cpus: int) -> pd.DataFrame:
             for future in as_completed(futures):
                 result = future.result()
                 if extract_bit_exp(result[0]):
-                    instructions.append(result[1])
-                bar()  # increment the progress bar by 1
+                    instructions.append((result[1], result[2]))
                 for binary in result[0]: 
                     os.remove(binary[0]) # binary is tuple where [0] is out_file
+                bar()  # increment the progress bar by 1
 
     return instructions
 
