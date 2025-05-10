@@ -29,7 +29,7 @@ def compare():
 
     # FaultFlipper require the Binary file
     ff_bin_file = Path("test_bin")
-    flip_inst = faultflipper_parse(ff_bin_file, 1)
+    flip_inst = faultflipper_parse(ff_bin_file, 6, run_nop=True)
     for insn, line_num in flip_inst:
         print(f"{insn.mnemonic} {insn.op_str}\ton line {line_num}")
 
@@ -64,13 +64,13 @@ def faultarm_parse(file: str) -> list[int]:
 
     vuln_lines = [vuln.line_number for vuln in vuln_instructions]
 
-    rel_num = []
+    rel_num = set()
     instruction_count = 0
     for instr in parsed_data.program:
         if type(instr) == Instruction and '.' not in instr.name and '@' not in instr.name:
             instruction_count += 1
             if instr.line_number in vuln_lines:
-                rel_num.append(instruction_count)
+                rel_num.add(instruction_count)
 
     return rel_num
 
@@ -89,10 +89,16 @@ def extract_bit_exp(result):
             return True
     return False
 
+def extract_nop_exp(result):
+    out_file, returncode, inst, common, target, stdout, stderr = result
+    if common.expected_stdout in stdout or common.expected_returncode == returncode:
+        return True
+    return False
 
-def faultflipper_parse(binary_path: Path, num_cpus: int) -> pd.DataFrame:
+
+def faultflipper_parse(binary_path: Path, num_cpus: int, run_nop=False, run_bit=False) -> pd.DataFrame:
     output_path = Path("out")
-    common = CommandParameters(binary_path, output_path, "wrong\n", "Access denied.", 0, timeout=0.5)
+    common = CommandParameters(binary_path, output_path, "nope\n", "Wrong\n", 97, timeout=0.5)
     common.out_dir.mkdir(exist_ok=True)
 
     binary = lief.parse(common.program_file)
@@ -126,29 +132,46 @@ def faultflipper_parse(binary_path: Path, num_cpus: int) -> pd.DataFrame:
 
     # creates wrapper function to pass to future
     para_bit_args = exp_wrapper(bit_para_run_helper)
+    para_nop_args = exp_wrapper(nop_para_run_helper)
 
-    # list of instructions to return from fn
-    instructions = []
+    # set of instructions to return from fn
+    instructions = set()
 
     max_workers = max(
         1, num_cpus // 2
     )  # avoid 0 in case cpu_count() returns None
+
+    # Thread pool handling bit data
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
+        nop_futures = []
+        bit_futures = []
         for inst_count, inst in enumerate(disasm):
-            future = executor.submit(para_bit_args, common, inst, target, inst_count)
-            futures.append(future)
+            if run_bit:
+                future_bit = executor.submit(para_bit_args, common, inst, target, inst_count)
+                bit_futures.append(future_bit)
+            if run_nop:
+                future_nop = executor.submit(para_nop_args, common, inst, target, inst_count)
+                nop_futures.append(future_nop)
 
-        total_tasks = len(futures)
+        total_tasks = len(nop_futures) + len(bit_futures)
 
-        with alive_bar(total_tasks, title="Processing tasks") as bar:
-            for future in as_completed(futures):
+        with alive_bar(total_tasks, title="Processing data") as bar:
+            # iterate over all of the bit futures
+            for future in as_completed(bit_futures):
                 result = future.result()
                 if extract_bit_exp(result[0]):
-                    instructions.append((result[1], result[2]))
+                    instructions.add((result[1], result[2]))
                 for binary in result[0]: 
                     os.remove(binary[0]) # binary is tuple where [0] is out_file
-                bar()  # increment the progress bar by 1
+                bar()
+
+            # iterate over all of the nop futures
+            for future in as_completed(nop_futures):
+                result = future.result()
+                if extract_nop_exp(result[0]):
+                    instructions.add((result[1], result[2]))
+                os.remove(result[0][0]) # [0][0] is out_file
+                bar()
 
     return instructions
 
