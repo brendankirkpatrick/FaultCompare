@@ -14,6 +14,7 @@ import pandas as pd
 # import FaultArm packages
 from Parser import Parser
 from Parser import Instruction
+from Parser import Architecture
 from Analyzer import Analyzer
 
 # import FaultFlipper packages
@@ -21,24 +22,35 @@ from cli import *
 
 
 def compare():
-    #fr_asm_file = str("./guillermo_compiler_complex_insecure.s")
-    fr_asm_file = str("./password_check.s")
-
-    # contains list of vulnerable instructions and their instruction number
-    arm_inst : list[int] = faultarm_parse(fr_asm_file)
-
     # FaultFlipper require the Binary file
     ff_bin_file = Path("test_bin")
     flip_inst = faultflipper_parse(ff_bin_file, 6, run_nop=True)
-    for insn, line_num in flip_inst:
-        print(f"{insn.mnemonic} {insn.op_str}\ton line {line_num}")
+    dynamic_set : set[int] = {lnum[1] for lnum in flip_inst}
+
+    #fr_asm_file = str("./guillermo_compiler_complex_insecure.s")
+    #fr_asm_file = str("./password_check.s")
+    fr_asm_file = str("./disasm.s")
+
+    # contains list of vulnerable instructions and their instruction number
+    static_set : set[int] = faultarm_parse(fr_asm_file)
+    print("Static:", static_set)
+    print()
+    print("Dynamic:", dynamic_set)
+    print()
+    print("Unique Static:", static_set - dynamic_set)
+    print()
+    print("Unique Dynaimc:", dynamic_set - static_set)
 
 
-def faultarm_parse(file: str) -> list[int]:
+def faultarm_parse(file: str) -> set[int]:
     # Parse data with Parser obj
     with console.status("Parsing file...", spinner="line"):
         try:
             parsed_data = Parser(file, console)
+            architecture = Architecture(line=None, instruction=None) 
+            architecture.name = "arm"
+            architecture.is_determined = True
+            parsed_data.arch = architecture
         except (FileNotFoundError, IsADirectoryError):
             console.print(f"[bright_red]Error: File {file} not found or not valid.[/bright_red]")
             exit(1)
@@ -91,14 +103,18 @@ def extract_bit_exp(result):
 
 def extract_nop_exp(result):
     out_file, returncode, inst, common, target, stdout, stderr = result
-    if common.expected_stdout in stdout or common.expected_returncode == returncode:
+    if stdout in common.expected_stdout and len(stdout) > 1: 
+        print(stdout, common.expected_stdout)
+        return True
+    if returncode == common.expected_returncode:
+        print(returncode, common.expected_returncode)
         return True
     return False
 
 
 def faultflipper_parse(binary_path: Path, num_cpus: int, run_nop=False, run_bit=False) -> pd.DataFrame:
     output_path = Path("out")
-    common = CommandParameters(binary_path, output_path, "nope\n", "Wrong\n", 97, timeout=0.5)
+    common = CommandParameters(binary_path, output_path, "nope\n", "Correct\n", 0, timeout=0.5)
     common.out_dir.mkdir(exist_ok=True)
 
     binary = lief.parse(common.program_file)
@@ -121,6 +137,11 @@ def faultflipper_parse(binary_path: Path, num_cpus: int, run_nop=False, run_bit=
         case _:
             raise Exception("Unsupported file type")
     disasm = list(md.disasm(text_section.content, text_section.virtual_address))
+
+    # Write disassembled output to a file
+    with open('disasm.s', 'w') as f:
+        for insn in disasm:
+            f.write(f"{insn.mnemonic}\t{insn.op_str}\n")
 
     # wrapper function to allow extracting instr from future
     def exp_wrapper(func):
