@@ -3,4 +3,4 @@
 	url = git@github.com:UCdasec/FaultFlipper.git
 [submodule "FaultArm"]
 	path = FaultArm
-	url = git@github.com:UCdasec/FaultArm.git
+	url = git@github.com:brendankirkpatrick/FaultArm.git
