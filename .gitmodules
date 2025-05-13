@@ -4,3 +4,4 @@
 [submodule "FaultArm"]
 	path = FaultArm
 	url = git@github.com:brendankirkpatrick/FaultArm.git
+	branch = dev
