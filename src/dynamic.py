@@ -1,0 +1,164 @@
+#!/usr/bin/python python3
+
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Set, Tuple, List
+
+from capstone import Cs
+import capstone
+import lief
+from alive_progress import alive_bar
+
+# add submodules to path for importing
+import sys, os
+sys.path.append(os.path.abspath(os.path.join('.', 'FaultFlipper/src')))
+
+# from newly added path
+from cli import *
+
+
+# runs FaultFlipper analysis on binary file, outputs a set of vulnerable line numbers
+def faultflipper_parse(binary_path: Path, num_cpus=1, run_nop=True, run_bit=False) -> Set[Tuple[object, int]]:
+    run_paramaters = generate_cmd_param(binary_path)
+    disasm = disassemble_binary(binary_path)
+
+    bit_helper = exp_wrapper(bit_para_run_helper)
+    nop_helper = exp_wrapper(nop_para_run_helper)
+
+    instructions = run_parallel_analysis(disasm, run_paramaters, num_cpus, run_nop, run_bit, bit_helper, nop_helper)
+
+    return instructions
+
+# wraps our run helper function calls to capture more data
+def exp_wrapper(func):
+    def wrapper(*args, **kwargs):
+        instn = args[1] if args else None
+        instn_count = args[-1] if args else None
+        return (func(*args[:-1], **kwargs), instn, instn_count)
+    return wrapper
+
+# defaults for CommandParameters values
+def generate_cmd_param(binary_path: Path):
+    output_path = Path("out")
+    output_path.mkdir(exist_ok=True)
+
+    # value fed to stdin for binary
+    prog_stdin = "nope\n"
+
+    # values to detect in program output
+    # if a value is detected, mark as vulnerable
+    stdout_detect = "Correct\n"
+    ret_detect = 0
+
+    timeout_seconds = 0.5
+    return CommandParameters(
+        binary_path, output_path, prog_stdin, stdout_detect, ret_detect, timeout=timeout_seconds
+    )
+
+# create disassembly from as list of CsInsn
+def disassemble_binary(program_file) -> List:
+    binary = lief.parse(str(program_file))
+
+    text_section = binary.get_section(".text")
+    if not text_section:
+        raise ValueError(".text section not found in the binary.")
+
+    target = detect_target(program_file)
+    md = get_disassembler(target)
+    disasm = list(md.disasm(text_section.content, text_section.virtual_address))
+
+    write_disasm(disasm)
+
+    return disasm
+
+# detection types 
+def get_disassembler(target):
+    match target:
+        case Target.X86_64:
+            return Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+        case Target.RISCV:
+            return Cs(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCV64 | capstone.CS_MODE_RISCVC)
+        case Target.ARM_64:
+            return Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_LITTLE_ENDIAN)
+        case Target.ARM_32:
+            return Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM)
+        case _:
+            raise Exception("Unsupported file type")
+
+# write disassembly to file 
+def write_disasm(disasm: List):
+    output_file = Path("out/disasm.s")
+    with output_file.open('w') as f:
+        for insn in disasm:
+            f.write(f"{insn.mnemonic}\t{insn.op_str}\n")
+
+# determines whether stdout or returncode is in bit output
+def extract_bit_exp(result):
+    for (
+        out_file,
+        returncode,
+        inst,
+        run_parameters,
+        target,
+        stdout,
+        stderr,
+        i,
+    ) in result:
+        if (run_parameters.expected_stdout in stdout or 
+            run_parameters.expected_returncode == returncode):
+            return True
+    return False
+
+# determines whether stdout or returncode is in nop output
+def extract_nop_exp(result):
+    out_file, returncode, inst, run_parameters, target, stdout, stderr = result
+    if stdout in run_parameters.expected_stdout and len(stdout) > 1: 
+        return True
+    if returncode == run_parameters.expected_returncode:
+        return True
+    return False
+
+# run nop and bit analysis while wrapping return values to extract line numbers
+def run_parallel_analysis(disasm, run_parameters, num_cpus, run_nop, run_bit, bit_helper, nop_helper):
+    instructions = set()
+    max_workers = max(1, num_cpus // 2)
+
+    # submit tasks to thread pool for nop/bit while wrapping responses
+    nop_futures, bit_futures = submit_tasks(disasm, run_parameters, run_nop, run_bit, nop_helper, bit_helper)
+
+    total_tasks = len(nop_futures) + len(bit_futures)
+
+    with alive_bar(total_tasks, title="Processing data") as bar, ThreadPoolExecutor(max_workers=max_workers):
+        process_futures(bit_futures, extract_bit_exp, lambda res: [os.remove(b[0]) for b in res[0]], instructions, bar)
+        process_futures(nop_futures, extract_nop_exp, lambda res: os.remove(res[0][0]), instructions, bar)
+
+    return instructions
+
+# put all of our simulations on the thread pool for execution
+def submit_tasks(disasm, run_parameters, run_nop, run_bit, nop_helper, bit_helper):
+    nop_futures = []
+    bit_futures = []
+
+    target = detect_target(run_parameters.program_file)
+
+    with ThreadPoolExecutor() as executor:
+        for inst_count, inst in enumerate(disasm):
+            if run_bit:
+                bit_futures.append(executor.submit(bit_helper, run_parameters, inst, target, inst_count))
+            if run_nop:
+                nop_futures.append(executor.submit(nop_helper, run_parameters, inst, target, inst_count))
+
+    return nop_futures, bit_futures
+
+# extract return values to push onto instruction set
+def process_futures(futures, extractor_fn, cleanup_fn, instructions, bar):
+    for future in as_completed(futures):
+        try:
+            result = future.result()
+            if extractor_fn(result[0]):
+                instructions.add((result[1], result[2]))
+            cleanup_fn(result)
+        except Exception as e:
+            print(f"Error processing future: {e}")
+        bar()
+
