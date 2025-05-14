@@ -9,7 +9,6 @@ sys.path.append(os.path.abspath(os.path.join('.', 'FaultFlipper/src')))
 
 # import packages from pip
 from utils import console
-import pandas as pd
 
 # import FaultArm packages
 from Parser import Parser
@@ -20,19 +19,19 @@ from Analyzer import Analyzer
 # import FaultFlipper packages
 from cli import *
 
-
 def compare():
     # FaultFlipper require the Binary file
-    ff_bin_file = Path("test_bin")
+    ff_bin_file = Path("test_files/pass_bin")
     flip_inst = faultflipper_parse(ff_bin_file, 6, run_nop=True)
     dynamic_set : set[int] = {lnum[1] for lnum in flip_inst}
 
-    #fr_asm_file = str("./guillermo_compiler_complex_insecure.s")
-    #fr_asm_file = str("./password_check.s")
-    fr_asm_file = str("./disasm.s")
+    # resultant file from disasm for FaultFlipper
+    fr_asm_file = str("./out/disasm.s")
+    #fr_asm_file = str("./test_files/pass_asm.s")
 
     # contains list of vulnerable instructions and their instruction number
     static_set : set[int] = faultarm_parse(fr_asm_file)
+
     print("Static:", static_set)
     print()
     print("Dynamic:", dynamic_set)
@@ -104,15 +103,13 @@ def extract_bit_exp(result):
 def extract_nop_exp(result):
     out_file, returncode, inst, common, target, stdout, stderr = result
     if stdout in common.expected_stdout and len(stdout) > 1: 
-        print(stdout, common.expected_stdout)
         return True
     if returncode == common.expected_returncode:
-        print(returncode, common.expected_returncode)
         return True
     return False
 
 
-def faultflipper_parse(binary_path: Path, num_cpus: int, run_nop=False, run_bit=False) -> pd.DataFrame:
+def faultflipper_parse(binary_path: Path, num_cpus: int, run_nop=False, run_bit=False) -> set(int):
     output_path = Path("out")
     common = CommandParameters(binary_path, output_path, "nope\n", "Correct\n", 0, timeout=0.5)
     common.out_dir.mkdir(exist_ok=True)
@@ -139,7 +136,7 @@ def faultflipper_parse(binary_path: Path, num_cpus: int, run_nop=False, run_bit=
     disasm = list(md.disasm(text_section.content, text_section.virtual_address))
 
     # Write disassembled output to a file
-    with open('disasm.s', 'w') as f:
+    with open('out/disasm.s', 'w') as f:
         for insn in disasm:
             f.write(f"{insn.mnemonic}\t{insn.op_str}\n")
 

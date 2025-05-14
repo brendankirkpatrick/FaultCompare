@@ -4,6 +4,7 @@ pixi.lock
 
 # Output directories
 out/
+build/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
