@@ -23,7 +23,7 @@ curl -fsSL https://pixi.sh/install.sh | bash
 ```
 Next, you need to make sure you have the appropriate ARM emulation tools installed with:
 ```bash
-sudo apt-get install gcc-arm-linux-gnueabi
+sudo apt install gcc-arm-linux-gnueabi
 sudo apt install qemu-user-static
 ```
 You can then install Python dependencies and run the project with:
