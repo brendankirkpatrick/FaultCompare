@@ -40,4 +40,4 @@ COPY src/ ./src
 # set the entrypoint to the shell-hook script (activate the environment and run the command)
 # no more pixi needed in the prod container
 ENTRYPOINT ["/bin/bash", "/shell-hook.sh"]
-CMD ["python", "src/compare.py"]
+CMD ["python", "src/compare.py", "--binary", "test_files/pass_bin"]

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Set, Tuple, List
 from collections import defaultdict
 import time
+import argparse
 
 from capstone import CsInsn
 
@@ -16,10 +17,10 @@ from dynamic import disassemble_binary, faultflipper_parse
 from static import faultarm_parse, DetectionType
 
 
-def compare():
+def compare(binary: str):
     # this file is created by faultflipper_parse
     asm_file = Path("out/disasm.s")
-    bin_file = Path("test_files/pass_BRANCH_bin")
+    bin_file = Path(binary)
 
     target = detect_target(bin_file)
 
@@ -60,7 +61,6 @@ def compare():
 def report_vuln_inline(nop_list: List, bit_list: List, static_list: List):
     nop_lookup = {ln: instruction for instruction, ln in nop_list}
     bit_lookup = {ln: instruction for instruction, ln in bit_list}
-    static_lookup = {ln: (instruction, dtype) for instruction, ln, dtype in static_list}
 
     # intermediate mapping: (ln, instruction) -> list of dtype
     _temp_lookup = defaultdict(list)
@@ -70,47 +70,54 @@ def report_vuln_inline(nop_list: List, bit_list: List, static_list: List):
     # final mapping: ln -> (instruction, list of dtype)
     static_lookup = {}
     for (ln, instruction), dtypes in _temp_lookup.items():
-        static_lookup[ln] = (instruction, dtypes)
+        # sort dtype so that it always appears in the same order
+        static_lookup[ln] = (instruction, sorted(dtypes, key=lambda p: p.value))
 
+    # merge sets together by line number
     fault_flip_union: List = sorted(
         set(nop_lookup.keys()) | set(bit_lookup.keys()) | set(static_lookup.keys())
     )
-    column_header1 = "Line:"
-    column_header2 = "Vulnerable Instructions:"
-    column_header3 = "Vulnerability Types:"
-    console.print(f"[green]{column_header1:<8}{column_header2:<40}{column_header3}")
-    for ln in fault_flip_union:
-        # console.print doesnt work with op_str, have to use regular print???
-        console.print(f"{str(ln) + ": ":<8}", end="")
-        if ln in nop_lookup:
-            instruction = nop_lookup[ln]
-            print(f"{instruction.mnemonic + " " + instruction.op_str:<40}", end="")
-        elif ln in bit_lookup:
-            instruction = bit_lookup[ln]
-            print(f"{instruction.mnemonic + " " + instruction.op_str:<40}", end="")
-        elif ln in static_lookup:
-            offset_str: str = ""
-            instruction = static_lookup[ln][0]
-            max_instr = len(instruction.arguments)
-            for count, offset in enumerate(instruction.arguments, start=1):
-                if type(offset) is Register or type(offset) is Location:
-                    offset_str += str(f"{offset.name}")
-                    if count < max_instr:
-                        offset_str += ", "
-                elif type(offset) is IntegerLiteral:
-                    offset_str += str(f"#{hex(offset.value)}")
-                else:
-                    offset_str += str(offset.value)
-            print(f"{instruction.name + " "  + offset_str:<40}", end="")
 
+    console.print(
+        f"[green]{'Line:':<8}{'Vulnerable Instructions:':<40}Vulnerability Types:"
+    )
+
+    for ln in fault_flip_union:
+        console.print(f"{str(ln) + ": ":<8}", end="")
+
+        # search nop -> bit -> static
+        instruction = nop_lookup.get(ln) or bit_lookup.get(ln)
+        if not instruction and ln in static_lookup:
+            instruction = static_lookup[ln][0]
+
+        instr_str = format_instruction(instruction)
+        print(f"{instr_str:<40}", end="")  # breaks with console.print for some reason
+
+        vuln_types = []
         if ln in static_lookup:
-            for dtype in static_lookup[ln][1]:
-                console.print(f"{dtype.name:<9}", end=" ")
+            vuln_types.extend(dtype.name for dtype in static_lookup[ln][1])
         if ln in nop_lookup:
-            console.print(f"{'NOP':<9}", end=" ")
+            vuln_types.append("NOP")
         if ln in bit_lookup:
-            console.print(f"{'BIT':<9}", end=" ")
-        print()
+            vuln_types.append("BIT")
+        console.print(" ".join(f"{v:<8}" for v in vuln_types))
+
+
+# format instruction into printable f string
+def format_instruction(instruction):
+    if hasattr(instruction, "mnemonic") and hasattr(instruction, "op_str"):
+        return f"{instruction.mnemonic} {instruction.op_str}"
+    elif hasattr(instruction, "name") and hasattr(instruction, "arguments"):
+        parts = []
+        for arg in instruction.arguments:
+            if isinstance(arg, (Register, Location)):
+                parts.append(arg.name)
+            elif isinstance(arg, IntegerLiteral):
+                parts.append(f"#{hex(arg.value)}")
+            else:
+                parts.append(str(arg.value))
+        return f"{instruction.name} {', '.join(parts)}"
+    return "UNKNOWN"
 
 
 # helper print fn
@@ -149,4 +156,11 @@ def print_farm_inst(inst_list: list):
 
 
 if __name__ == "__main__":
-    compare()
+    parser = argparse.ArgumentParser(
+        prog="FaultCompare",
+        description="Dynamic/Static analysis for binary vulnerabilities",
+    )
+    parser.add_argument("-b", "--binary")
+    args = parser.parse_args()
+
+    compare(args.binary)

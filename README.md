@@ -33,4 +33,10 @@ pixi run compare
 ```
 
 ## Usage:
-[TODO] For now, change the string in src/compare.py to the files you want to read/write.
+In the pixi file I have preset the following command:
+```bash 
+python src/compare.py --binary test_files/pass_bin
+```
+You can either run the project via the *Dockerfile* or via `pixi run compare`.
+Alternatively, to change the command that is run, you can change the binary file in the *pixi.toml* file to an arm32 binary.
+
