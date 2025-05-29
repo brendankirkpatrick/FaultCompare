@@ -17,32 +17,30 @@ from dynamic import disassemble_binary, faultflipper_parse
 from static import faultarm_parse, DetectionType
 
 
-def compare(binary: str):
+def compare(args):
     # this file is created by faultflipper_parse
+
     asm_file = Path("out/disasm.s")
-    bin_file = Path(binary)
+    bin_file = Path(args.binary)
 
     target = detect_target(bin_file)
 
     stime = time.perf_counter()
     # faultflipper returns (CsInsn, line_number)
-    nop_inst, bit_inst = faultflipper_parse(
-        bin_file, target, run_nop=True, run_bit=False
+    nop_inst, bit_inst, segfaults = faultflipper_parse(
+        bin_file, target, run_nop=args.nop, run_bit=args.bitflip, num_cpus=4
     )
     ff_elapsed = time.perf_counter() - stime
+    nop_list = sorted(nop_inst, key=lambda x: x[1])
+    bit_list = sorted(bit_inst, key=lambda x: x[1])
 
     stime = time.perf_counter()
     # faultarm returns (Instruction, line_number, DetectionType)
-    farm_inst = faultarm_parse(asm_file, target)
+    farm_inst = faultarm_parse(asm_file, target) if args.static else set()
     fa_elapsed = time.perf_counter() - stime
 
     finst_sort = sorted(farm_inst, key=lambda x: x[1])
 
-    nop_list = sorted(nop_inst, key=lambda x: x[1])
-    bit_list = sorted(bit_inst, key=lambda x: x[1])
-
-    # print_farm_inst(finst_sort)
-    # print_flip_inst(nop_list, bit_list)
     if ff_elapsed + fa_elapsed < 120:
         console.print(
             f"[magenta]Total Time Elapsed: FaultFlipper({ff_elapsed:.3f}s) + "
@@ -54,7 +52,14 @@ def compare(binary: str):
             f"FaultArm({60 * fa_elapsed:.2f}s) = Total({60*(ff_elapsed + fa_elapsed):.2f}s)[/magenta]"
         )
 
-    report_vuln_inline(nop_list, bit_list, finst_sort)
+    if args.report_individual:
+        print_farm_inst(finst_sort)
+        print_flip_inst(nop_list, bit_list)
+    else:
+        report_vuln_inline(nop_list, bit_list, finst_sort)
+
+    if args.report_segfaults:
+        report_segfaults(segfaults)
 
 
 # report all vulns one line
@@ -155,12 +160,46 @@ def print_farm_inst(inst_list: list):
         print(f"{dtype.name}")
 
 
+# print out all of the lines that failed due to segfault (as opposed to returncode or stdout)
+def report_segfaults(segfaults):
+    console.print(f"[green]Error Line Numbers:[/green]\n{sorted(segfaults)}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="FaultCompare",
         description="Dynamic/Static analysis for binary vulnerabilities",
     )
-    parser.add_argument("-b", "--binary")
+
+    parser.add_argument(
+        "-b",
+        "--binary",
+        action="store",
+        help="Path to the binary file to be analyzed",
+        required=True,
+    )
+    parser.add_argument(
+        "-n", "--nop", action="store_false", help="Disable NOP dynamic analysis"
+    )
+    parser.add_argument(
+        "-f", "--bitflip", action="store_false", help="Disable BIT dynamic analysis"
+    )
+    parser.add_argument(
+        "-s", "--static", action="store_false", help="Disable static analysis"
+    )
+    parser.add_argument(
+        "-r",
+        "--report-segfaults",
+        action="store_true",
+        help="Report lines resulting in SIGSEGV during dynamic analysis",
+    )
+    parser.add_argument(
+        "-i",
+        "--report-individual",
+        action="store_true",
+        help="Report vulnerable lines for static/dynamic analysis separately",
+    )
+
     args = parser.parse_args()
 
-    compare(args.binary)
+    compare(args)

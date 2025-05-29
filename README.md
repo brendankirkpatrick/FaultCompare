@@ -33,10 +33,27 @@ pixi run compare
 ```
 
 ## Usage:
-In the pixi file I have preset the following command:
+You can either run the project via the *Dockerfile* or via `pixi run compare` (see setup above).
+
+To run the project via the pixi file, you must first enter a *pixi shell environment*.\
+Then, you can simply run the Python code like any ordinary Python script:
 ```bash 
+pixi shell
 python src/compare.py --binary test_files/pass_bin
 ```
-You can either run the project via the *Dockerfile* or via `pixi run compare`.
-Alternatively, to change the command that is run, you can change the binary file in the *pixi.toml* file to an arm32 binary.
 
+To run the project via a Docker container, you must first build your docker image.\
+You can either launch with the default command (specified in the Dockerfile), or you can provide your own command:
+```bash 
+# Run with the "default" command
+docker run --rm fault-compare
+# Run with custom flags
+docker run --rm fault-compare python src/compare.py --binary test_files/pass_bin
+# You can also enter the docker container environment like this
+docker run --rm -it fault-compare bash
+```
+
+To read more about the default options, run the program with the `--help` flag.
+```bash 
+python src/compare.py --help
+```

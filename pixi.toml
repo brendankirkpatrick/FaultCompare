@@ -40,4 +40,4 @@ update = { cmd = [
     "update",
     "--recursive",
 ] }
-compare = { cmd = "python src/compare.py --binary test_files/pass_bin" }
+compare = { cmd = "python src/compare.py -f --binary test_files/pass_bin" }
