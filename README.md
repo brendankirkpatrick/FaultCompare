@@ -49,8 +49,9 @@ You can either launch with the default command (specified in the Dockerfile), or
 docker run --rm fault-compare
 # Run with custom flags
 docker run --rm fault-compare python src/compare.py --binary test_files/pass_bin
-# You can also enter the docker container environment like this
-docker run --rm -it fault-compare bash
+# You can also enter the docker container environment to run manually
+# (use ulimit to disable core dumps)
+docker run --rm --ulimit core=0 -it fault-compare bash
 ```
 
 To read more about the default options, run the program with the `--help` flag.

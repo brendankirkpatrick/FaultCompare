@@ -7,6 +7,9 @@ import time
 import argparse
 
 from capstone import CsInsn
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import numpy as np
 
 from common import *
 
@@ -27,8 +30,12 @@ def compare(args):
 
     stime = time.perf_counter()
     # faultflipper returns (CsInsn, line_number)
-    nop_inst, bit_inst, segfaults = faultflipper_parse(
-        bin_file, target, run_nop=args.nop, run_bit=args.bitflip, num_cpus=4
+    nop_inst, bit_inst, segfaults, num_instructions = faultflipper_parse(
+        bin_file,
+        target,
+        run_nop=not args.disable_nop,
+        run_bit=not args.disable_bitflip,
+        num_cpus=4,
     )
     ff_elapsed = time.perf_counter() - stime
     nop_list = sorted(nop_inst, key=lambda x: x[1])
@@ -36,7 +43,7 @@ def compare(args):
 
     stime = time.perf_counter()
     # faultarm returns (Instruction, line_number, DetectionType)
-    farm_inst = faultarm_parse(asm_file, target) if args.static else set()
+    farm_inst = faultarm_parse(asm_file, target) if not args.disable_static else set()
     fa_elapsed = time.perf_counter() - stime
 
     finst_sort = sorted(farm_inst, key=lambda x: x[1])
@@ -60,6 +67,14 @@ def compare(args):
 
     if args.report_segfaults:
         report_segfaults(segfaults)
+
+    if args.create_graph:
+        if args.disable_bitflip or args.disable_nop or args.disable_static:
+            console.print(
+                f"[red]Error:[/red] Unable to create graph. Must have static, bitflip, and nop enabled."
+            )
+        else:
+            create_plot(nop_list, bit_list, finst_sort, segfaults, num_instructions)
 
 
 # report all vulns one line
@@ -165,6 +180,107 @@ def report_segfaults(segfaults):
     console.print(f"[green]Error Line Numbers:[/green]\n{sorted(segfaults)}")
 
 
+# create matplotlib plot
+def create_plot(nop_list, bit_list, static_list, segfaults, num_instructions):
+    # Configuration
+    dtypes = ["Bypass", "Loop", "Constant", "Branch", "NOP", "BIT"]
+    colors = {
+        "Both": "#7f2a19",  # blue
+        "SIGSEGV": "#f6b26b",  # orange
+        "Vulnerable": "#e66c2c",  # red
+        "normal": "#e0e0e0",  # gray (default background)
+    }
+
+    nops = [ln for _, ln in nop_list]
+    bits = [ln for _, ln in bit_list]
+    constants = [ln for _, ln, dtype in static_list if dtype == DetectionType.Constant]
+    branches = [ln for _, ln, dtype in static_list if dtype == DetectionType.BranchV2]
+    loops = [ln for _, ln, dtype in static_list if dtype == DetectionType.Loop]
+    bypasses = [ln for _, ln, dtype in static_list if dtype == DetectionType.Bypass]
+
+    # Rows to in table consisting of sublists
+    vulns = [bypasses, loops, constants, branches, nops, bits]
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(14, 8))
+    y_pos = np.arange(len(dtypes))
+    height = 0.8
+
+    plt.rcParams.update(
+        {
+            "font.size": 14,  # Base font size
+            "axes.titlesize": 30,  # Title
+            "axes.labelsize": 20,  # X and Y labels
+        }
+    )
+
+    for i, row in enumerate(vulns):
+        for j in range(num_instructions):
+            if j in row:
+                if j in segfaults:
+                    ax.barh(
+                        i,
+                        1,
+                        left=j,
+                        height=height,
+                        color=colors["Both"],
+                        edgecolor="none",
+                    )
+                else:
+                    ax.barh(
+                        i,
+                        1,
+                        left=j,
+                        height=height,
+                        color=colors["Vulnerable"],
+                        edgecolor="none",
+                    )
+            elif j in segfaults:
+                ax.barh(
+                    i,
+                    1,
+                    left=j,
+                    height=height,
+                    color=colors["SIGSEGV"],
+                    edgecolor="none",
+                )
+            else:
+                ax.barh(
+                    i,
+                    1,
+                    left=j,
+                    height=height,
+                    color=colors["normal"],
+                    edgecolor="none",
+                )
+
+    # Formatting
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels([f"{d}" for d in dtypes])
+    ax.tick_params(axis="y", labelsize=20)
+    ax.invert_yaxis()  # Like in the image
+
+    tick_interval = 30
+    xticks = list(range(0, num_instructions + 1, tick_interval))
+    xtick_labels = [str(i + 1) for i in xticks]
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xtick_labels)
+
+    ax.set_xlabel("Line Number", fontsize=20)
+    ax.set_title("Vulnerable Instructions")
+
+    legend_handles = [
+        mpatches.Patch(color=colors["Both"], label="SIGSEGV and Vulnerable Output"),
+        mpatches.Patch(color=colors["Vulnerable"], label="Vulnerable Output"),
+        mpatches.Patch(color=colors["SIGSEGV"], label="SIGSEGV"),
+    ]
+    ax.legend(handles=legend_handles, loc="lower right")
+
+    plt.tight_layout()
+    plt.savefig("out/graph.png", dpi=300, bbox_inches="tight")
+    plt.show()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="FaultCompare",
@@ -179,13 +295,22 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument(
-        "-n", "--nop", action="store_false", help="Disable NOP dynamic analysis"
+        "-n",
+        "--disable-nop",
+        action="store_true",
+        help="Disable dynamic analysis for NOP",
     )
     parser.add_argument(
-        "-f", "--bitflip", action="store_false", help="Disable BIT dynamic analysis"
+        "-f",
+        "--disable-bitflip",
+        action="store_true",
+        help="Disable dynamic analysis for BIT",
     )
     parser.add_argument(
-        "-s", "--static", action="store_false", help="Disable static analysis"
+        "-s",
+        "--disable-static",
+        action="store_true",
+        help="Disable all static analysis",
     )
     parser.add_argument(
         "-r",
@@ -198,6 +323,12 @@ if __name__ == "__main__":
         "--report-individual",
         action="store_true",
         help="Report vulnerable lines for static/dynamic analysis separately",
+    )
+    parser.add_argument(
+        "-g",
+        "--create-graph",
+        action="store_true",
+        help="Create vulnerability graph",
     )
 
     args = parser.parse_args()

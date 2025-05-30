@@ -36,7 +36,7 @@ def faultflipper_parse(
         nop_helper,
     )
 
-    return nop_instructions, bit_instructions, set(segfaults)
+    return nop_instructions, bit_instructions, set(segfaults), len(disasm)
 
 
 # wraps our run helper function calls to capture more data
